@@ -6,8 +6,17 @@ from langchain_core.messages import HumanMessage, AIMessage
 from config_loader import config
 from memory_manager import MemoryManager
 from agent_workflow import app as agent_app
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="AI Agent API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ChatRequest(BaseModel):
     user_id: str

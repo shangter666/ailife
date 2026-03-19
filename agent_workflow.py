@@ -55,7 +55,7 @@ def chat_node(state: AgentState):
 # 3. Node 2: reflect_node
 def reflect_node(state: AgentState):
     """
-    对话结束后获取新特征或事实。
+    对话结束后获取新特征或事实。使用系统级提示词进行全息画像提取和更新。
     """
     messages = state["messages"]
     memory = state["memory_snapshot"]
@@ -65,23 +65,53 @@ def reflect_node(state: AgentState):
         [f"{m.type}: {m.content}" for m in messages if isinstance(m, (HumanMessage, AIMessage))]
     )
     
+    # 获取现有全息画像（排除自动更新的时间戳）
+    current_profile = json.dumps(memory.model_dump(exclude={"last_updated"}), ensure_ascii=False)
+    
     reflect_prompt = f"""
-分析以上对话，提取用户展现出的新特征或事实。仅输出增量 JSON，不要废话。
-对话内容如下：
+# 角色设定
+你是一个极其精准的“用户记忆管理专家”。你的任务是分析用户与数字分身的最新对话记录，提取关于用户的长期、有价值的事实信息，并以此更新用户的全息画像（Profile）。
+
+# 提取规则
+1. **只提取长期事实**：重点关注用户的职业、技能、兴趣爱好、性格特征、重要经历、偏好习惯等。忽略日常问候、临时情绪或无关紧要的闲聊。
+2. **增量更新与合并**：对比【现有用户画像】和【最新对话记录】。
+   - 如果出现了新的信息，请将其补充到画像中。
+   - 如果出现了对旧信息的修改（例如用户说“我不再做X了，我现在做Y”），请更新旧信息。
+   - 如果没有提取到任何有价值的新信息，请保持原有画像不变。
+3. **客观描述**：使用简练、客观的第三方视角或名词短语进行记录。
+4. **强制输出格式**：你必须且只能输出一个合法的 JSON 对象，不要包含任何额外的解释文本、Markdown 代码块标记（如 ```json）。
+
+# 输入数据
+【现有用户画像】:
+{current_profile}
+
+【最新对话记录】:
 {conversation_history}
 
-请务必输出如下合法的 JSON 格式（无需提供原本已有的信息，仅提供本次对话中的新增量）：
+# 示例参考
+【现有用户画像】: 
+{{"basic_info": {{"interests": ["加密货币"]}}, "personality_traits": [], "significant_events": [], "speaking_style": []}}
+
+【最新对话记录】:
+User: 我最近在用 Python 写一个带 GUI 的视频压缩工具。周末我还打算带相机去拍一些人像摄影，练习一下布光。
+Agent: 听起来周末安排得很充实！Python 做 GUI 挺方便的。人像摄影准备去室外还是室内？
+
+【你的输出 JSON】:
 {{
-    "basic_info": {{}},
-    "personality_traits": [],
-    "significant_events": [],
-    "speaking_style": []
+  "basic_info": {{"interests": ["加密货币", "视频制作", "人像摄影"], "skills": ["Python", "GUI开发"]}},
+  "personality_traits": [],
+  "significant_events": [],
+  "speaking_style": []
 }}
+
+# 任务开始
+请根据上述规则，输出更新后的 JSON 画像：
 """
     
-    response = llm.invoke(reflect_prompt)
+    human_msg = HumanMessage(content=reflect_prompt)
+    response = llm.invoke([human_msg])
     
-    print("\n[Reflect Node] Extracted JSON Delta:")
+    print("\n[Reflect Node] Updated Profile JSON:")
     print(response.content)
     print("-" * 40)
     
@@ -92,20 +122,20 @@ def reflect_node(state: AgentState):
         elif content.startswith("```"):
             content = content[3:-3].strip()
             
-        json_delta = json.loads(content)
+        json_data = json.loads(content)
         
-        # update basic_info
-        if "basic_info" in json_delta and isinstance(json_delta["basic_info"], dict):
-            memory.basic_info.update(json_delta["basic_info"])
+        # 将 LLM 输出的完整新画像直接覆盖替换当前内存的各项参数
+        if "basic_info" in json_data and isinstance(json_data["basic_info"], dict):
+            memory.basic_info = json_data["basic_info"]
             
-        if "personality_traits" in json_delta and isinstance(json_delta["personality_traits"], list):
-            memory.personality_traits.extend(json_delta["personality_traits"])
+        if "personality_traits" in json_data and isinstance(json_data["personality_traits"], list):
+            memory.personality_traits = json_data["personality_traits"]
             
-        if "significant_events" in json_delta and isinstance(json_delta["significant_events"], list):
-            memory.significant_events.extend(json_delta["significant_events"])
+        if "significant_events" in json_data and isinstance(json_data["significant_events"], list):
+            memory.significant_events = json_data["significant_events"]
             
-        if "speaking_style" in json_delta and isinstance(json_delta["speaking_style"], list):
-            memory.speaking_style.extend(json_delta["speaking_style"])
+        if "speaking_style" in json_data and isinstance(json_data["speaking_style"], list):
+            memory.speaking_style = json_data["speaking_style"]
             
         return {"memory_snapshot": memory}
     except Exception as e:
