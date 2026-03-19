@@ -26,10 +26,26 @@ llm = ChatOpenAI(
     temperature=config.llm_settings.temperature,
 )
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import ToolNode, tools_condition
+
+# 定义可用工具列表
+@tool
+def get_current_time(timezone: str = "Asia/Shanghai") -> str:
+    """Get the current time and date in the specific timezone."""
+    from datetime import datetime
+    import pytz
+    tz = pytz.timezone(timezone)
+    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+tools = [get_current_time]
+# 绑定工具至核心对话模型
+llm_with_tools = llm.bind_tools(tools)
+
 # 2. Node 1: chat_node
 def chat_node(state: AgentState):
     """
-    调用 LLM 生成回复。
+    调用绑定了 tools 的 LLM 生成回复。
     """
     messages = state["messages"]
     memory = state["memory_snapshot"]
@@ -42,14 +58,13 @@ def chat_node(state: AgentState):
 [重要事件]: {memory.significant_events}
 [说话风格]: {memory.speaking_style}
 
-请充分运用以上记忆和用户交流。
+请充分运用以上记忆和用户交流。如果用户询问时间，请调用时间工具。
 """
     system_msg = SystemMessage(content=memory_prompt)
     
-    # 组合 SystemMessage 和对话历史发送给大模型
-    response = llm.invoke([system_msg] + messages)
+    # 组合 SystemMessage 和对话历史发送给挂载了工具的大模型
+    response = llm_with_tools.invoke([system_msg] + messages)
     
-    # 返回新的 LLM 消息回复
     return {"messages": [response]}
 
 # 3. Node 2: reflect_node
@@ -78,48 +93,80 @@ def reflect_node(state: AgentState):
     reflect_prompt = soul_template.replace("{current_profile}", current_profile).replace("{conversation_history}", conversation_history)
     
     human_msg = HumanMessage(content=reflect_prompt)
-    response = llm.invoke([human_msg])
-    
-    print("\n[Reflect Node] Updated Profile JSON:")
-    print(response.content)
-    print("-" * 40)
     
     try:
-        content = response.content.strip()
-        if content.startswith("```json"):
-            content = content[7:-3].strip()
-        elif content.startswith("```"):
-            content = content[3:-3].strip()
-            
-        json_data = json.loads(content)
+        # 使用 LangChain 的原生机制，利用 Pydantic 约束大模型输出
+        structured_llm = llm.with_structured_output(UserMemory, method="json_mode")
+        updated_memory = structured_llm.invoke([human_msg])
         
-        # 将 LLM 输出的完整新画像直接覆盖替换当前内存的各项参数
-        if "basic_info" in json_data and isinstance(json_data["basic_info"], dict):
-            memory.basic_info = json_data["basic_info"]
-            
-        if "personality_traits" in json_data and isinstance(json_data["personality_traits"], list):
-            memory.personality_traits = json_data["personality_traits"]
-            
-        if "significant_events" in json_data and isinstance(json_data["significant_events"], list):
-            memory.significant_events = json_data["significant_events"]
-            
-        if "speaking_style" in json_data and isinstance(json_data["speaking_style"], list):
-            memory.speaking_style = json_data["speaking_style"]
-            
-        return {"memory_snapshot": memory}
+        print("\n[Reflect Node] Updated Profile (Structured Output):")
+        print(updated_memory.model_dump())
+        print("-" * 40)
+        
+        # 结构化输出会直接返回校验好的 UserMemory 对象实例，我们直接将其应用替换状态
+        return {"memory_snapshot": updated_memory}
     except Exception as e:
-        print(f"Error parsing JSON from Reflect Node: {e}")
+        print(f"Error generating or parsing Structured Output from Reflect Node: {e}")
         return {}
 
-# 4. 构建 Graph
+# 构建附加工具节点的 Graph
+tool_node = ToolNode(tools)
+
+# 4. Node 3: compress_memory_node
+def compress_memory_node(state: AgentState):
+    """
+    当对话记录过长时，将历史记录浓缩为摘要以节省上下文 Token。
+    """
+    messages = state["messages"]
+    
+    # 留下最后两次交互（通常是人与 AI 的一问一答），压缩之前的记录
+    messages_to_compress = messages[:-2]
+    
+    if not messages_to_compress:
+        return {}
+        
+    conversation_history = "\n".join(
+        [f"{m.type}: {m.content}" for m in messages_to_compress if isinstance(m, (HumanMessage, AIMessage))]
+    )
+    
+    summary_prompt = f"请高度概括并压缩以下对话历史，提取核心意图，作为后续对话的上下文简述：\n{conversation_history}"
+    human_msg = HumanMessage(content=summary_prompt)
+    summary_response = llm.invoke([human_msg])
+    
+    try:
+        from langchain_core.messages import RemoveMessage
+        # 利用 RemoveMessage 来精确删除长序列历史
+        delete_actions = [RemoveMessage(id=m.id) for m in messages_to_compress if m.id]
+        
+        # 将被删除的数据固化为一个系统层级的摘要消息
+        summary_msg = SystemMessage(content=f"[系统自动折叠的历史摘要]:\n{summary_response.content}")
+        
+        print(f"\n[Compress Node] Compressed {len(messages_to_compress)} messages into summary.")
+        return {"messages": delete_actions + [summary_msg]}
+    except Exception as e:
+        print(f"Error compressing memory: {e}")
+        return {}
+        
+def should_compress(state: AgentState):
+    messages = state["messages"]
+    # 阈值配置：当历史堆叠超过 6 条消息后开始触发滑动窗口压缩
+    if len(messages) > 6:
+        return "compress_memory_node"
+    return "chat_node"
+
 builder = StateGraph(AgentState)
 
+builder.add_node("compress_memory_node", compress_memory_node)
 builder.add_node("chat_node", chat_node)
+builder.add_node("tools", tool_node)
 builder.add_node("reflect_node", reflect_node)
 
-# 5. 定义 Edge: START -> chat_node -> reflect_node -> END
-builder.add_edge(START, "chat_node")
-builder.add_edge("chat_node", "reflect_node")
+# 定义 Edge逻辑：START -> (条件判断是否压缩) -> chat_node <-> tools
+# 结束聊天循环后走向 -> reflect_node -> END
+builder.add_conditional_edges(START, should_compress, path_map={"compress_memory_node": "compress_memory_node", "chat_node": "chat_node"})
+builder.add_edge("compress_memory_node", "chat_node")
+builder.add_conditional_edges("chat_node", tools_condition, path_map={"tools": "tools", "__end__": "reflect_node"})
+builder.add_edge("tools", "chat_node")
 builder.add_edge("reflect_node", END)
 
 # 6. 导出 app 实例

@@ -37,7 +37,9 @@ def get_user_memory_manager(user_id: str) -> MemoryManager:
         path = os.path.join(storage_path, f"{user_id}.json")
     return MemoryManager(path)
 
-@app.post("/v1/chat", response_model=ChatResponse)
+from fastapi.responses import StreamingResponse
+
+@app.post("/v1/chat")
 async def chat_endpoint(request: ChatRequest):
     manager = get_user_memory_manager(request.user_id)
     # 根据 user_id 加载记忆
@@ -48,27 +50,34 @@ async def chat_endpoint(request: ChatRequest):
         "memory_snapshot": memory
     }
     
-    print(f"Processing chat for {request.user_id}...")
-    try:
-        final_state = agent_app.invoke(initial_state)
-        
-        # workflow 完成，自动触发的 reflect_node 已更新 memory_snapshot 引用
-        updated_memory = final_state.get("memory_snapshot", memory)
-        
-        # 自动执行落盘保存最新 JSON
-        manager.save_memory(updated_memory)
-        
-        # 从消息序列尾部提取最新的回复
-        messages = final_state.get("messages", [])
-        ai_reply = ""
-        if messages and isinstance(messages[-1], AIMessage):
-            ai_reply = messages[-1].content
+    print(f"Processing streaming chat for {request.user_id}...")
+    
+    async def generate_response():
+        final_state = None
+        try:
+            # stream_mode=["messages", "values"] 将流式发射字级别块，同时捕捉节点结束时刻的全景状态
+            async for output in agent_app.astream(initial_state, stream_mode=["messages", "values"]):
+                mode, data = output
+                if mode == "messages":
+                    msg, metadata = data
+                    # 如果这句消息是 LLM(对话节点) 的逐字流块，返回给客户端
+                    if metadata.get("langgraph_node") == "chat_node" and msg.content:
+                        if isinstance(msg.content, str):
+                            yield msg.content
+                elif mode == "values":
+                    # 会在每一个 Node 执行完成后抓取到最新的整体 Graph State
+                    final_state = data
             
-        return ChatResponse(reply=ai_reply)
-        
-    except Exception as e:
-        print("Chat Error:", e)
-        raise HTTPException(status_code=500, detail=str(e))
+            # 当所有流程走完（如后台的 reflect 思考结束），进行自动状态落盘保存
+            if final_state:
+                updated_memory = final_state.get("memory_snapshot", memory)
+                manager.save_memory(updated_memory)
+                print(f"[{request.user_id}] Memory saved successfully post-stream.")
+        except Exception as e:
+            print(f"Stream error: {e}")
+            yield f"\n[Backend Error: {e}]"
+
+    return StreamingResponse(generate_response(), media_type="text/plain")
 
 @app.get("/v1/memory/{user_id}")
 async def get_memory(user_id: str):
