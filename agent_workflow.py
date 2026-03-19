@@ -68,45 +68,14 @@ def reflect_node(state: AgentState):
     # 获取现有全息画像（排除自动更新的时间戳）
     current_profile = json.dumps(memory.model_dump(exclude={"last_updated"}), ensure_ascii=False)
     
-    reflect_prompt = f"""
-# 角色设定
-你是一个极其精准的“用户记忆管理专家”。你的任务是分析用户与数字分身的最新对话记录，提取关于用户的长期、有价值的事实信息，并以此更新用户的全息画像（Profile）。
-
-# 提取规则
-1. **只提取长期事实**：重点关注用户的职业、技能、兴趣爱好、性格特征、重要经历、偏好习惯等。忽略日常问候、临时情绪或无关紧要的闲聊。
-2. **增量更新与合并**：对比【现有用户画像】和【最新对话记录】。
-   - 如果出现了新的信息，请将其补充到画像中。
-   - 如果出现了对旧信息的修改（例如用户说“我不再做X了，我现在做Y”），请更新旧信息。
-   - 如果没有提取到任何有价值的新信息，请保持原有画像不变。
-3. **客观描述**：使用简练、客观的第三方视角或名词短语进行记录。
-4. **强制输出格式**：你必须且只能输出一个合法的 JSON 对象，不要包含任何额外的解释文本、Markdown 代码块标记（如 ```json）。
-
-# 输入数据
-【现有用户画像】:
-{current_profile}
-
-【最新对话记录】:
-{conversation_history}
-
-# 示例参考
-【现有用户画像】: 
-{{"basic_info": {{"interests": ["加密货币"]}}, "personality_traits": [], "significant_events": [], "speaking_style": []}}
-
-【最新对话记录】:
-User: 我最近在用 Python 写一个带 GUI 的视频压缩工具。周末我还打算带相机去拍一些人像摄影，练习一下布光。
-Agent: 听起来周末安排得很充实！Python 做 GUI 挺方便的。人像摄影准备去室外还是室内？
-
-【你的输出 JSON】:
-{{
-  "basic_info": {{"interests": ["加密货币", "视频制作", "人像摄影"], "skills": ["Python", "GUI开发"]}},
-  "personality_traits": [],
-  "significant_events": [],
-  "speaking_style": []
-}}
-
-# 任务开始
-请根据上述规则，输出更新后的 JSON 画像：
-"""
+    # 动态读取外部提取提示词文件，实现代码与提示词分离
+    import os
+    soul_prompt_path = os.path.join(os.path.dirname(__file__), "soul.md")
+    with open(soul_prompt_path, "r", encoding="utf-8") as f:
+        soul_template = f.read()
+        
+    # 基于常规占位符进行替换，避免硬编码 f-string 破坏含有真实 JSON 的模板
+    reflect_prompt = soul_template.replace("{current_profile}", current_profile).replace("{conversation_history}", conversation_history)
     
     human_msg = HumanMessage(content=reflect_prompt)
     response = llm.invoke([human_msg])
