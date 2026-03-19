@@ -1,0 +1,8 @@
+llm_settings:
+  api_key: "sk-56b51dc6d7734e9085cbb2a1d0a0d2a9"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model_name: "qwen3.5-flash"
+  temperature: 0.7
+
+storage_settings:
+  memory_path: "./memory"
