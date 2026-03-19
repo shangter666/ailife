@@ -58,6 +58,7 @@ def reflect_node(state: AgentState):
     对话结束后获取新特征或事实。
     """
     messages = state["messages"]
+    memory = state["memory_snapshot"]
     
     # 将会话历史拼接成文本
     conversation_history = "\n".join(
@@ -84,9 +85,32 @@ def reflect_node(state: AgentState):
     print(response.content)
     print("-" * 40)
     
-    # 我们这里仅执行打印和解析提取。在实际生产流里，可以选择在 state 中合并它，或者由另外的节点将它落盘至 JSON。
-    # 这里我们返回空的字典字典即可，无需变更 state 中别的参数。
-    return {}
+    try:
+        content = response.content.strip()
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        json_delta = json.loads(content)
+        
+        # update basic_info
+        if "basic_info" in json_delta and isinstance(json_delta["basic_info"], dict):
+            memory.basic_info.update(json_delta["basic_info"])
+            
+        if "personality_traits" in json_delta and isinstance(json_delta["personality_traits"], list):
+            memory.personality_traits.extend(json_delta["personality_traits"])
+            
+        if "significant_events" in json_delta and isinstance(json_delta["significant_events"], list):
+            memory.significant_events.extend(json_delta["significant_events"])
+            
+        if "speaking_style" in json_delta and isinstance(json_delta["speaking_style"], list):
+            memory.speaking_style.extend(json_delta["speaking_style"])
+            
+        return {"memory_snapshot": memory}
+    except Exception as e:
+        print(f"Error parsing JSON from Reflect Node: {e}")
+        return {}
 
 # 4. 构建 Graph
 builder = StateGraph(AgentState)
