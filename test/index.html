@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent Testing Client</title>
+    <!-- Modern typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="glass-container">
+        <!-- Sidebar for Settings & Memory Viewer -->
+        <aside class="sidebar">
+            <div class="user-config">
+                <h2>Settings</h2>
+                <div class="input-group">
+                    <label for="user-id">User ID</label>
+                    <input type="text" id="user-id" value="test_user" placeholder="Enter User ID">
+                </div>
+                <button id="load-memory-btn" class="btn primary">Load Memory</button>
+            </div>
+            
+            <div class="memory-section">
+                <h2>Memory Snapshot</h2>
+                <div id="memory-display" class="memory-display">
+                    <p class="placeholder">Click "Load Memory" to view.</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <h1>Digital Twin Agent</h1>
+                <div class="status-indicator">
+                    <span class="dot"></span> Online
+                </div>
+            </header>
+            
+            <div id="chat-box" class="chat-box">
+                <div class="message system">
+                    <div class="bubble">Welcome! Set your User ID on the left and start chatting to evolve the digital twin's memory.</div>
+                </div>
+            </div>
+            
+            <div class="input-area">
+                <input type="text" id="chat-input" placeholder="Type your message..." autocomplete="off">
+                <button id="send-btn" class="btn primary send-btn">
+                    <!-- Send Icon -->
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- App logic -->
+    <script src="app.js"></script>
+</body>
+</html>
