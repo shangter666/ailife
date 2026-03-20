@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Environments
+venv/
+env/
+.env
+
+# AiLife runtime data (DO NOT TRACK)
+memory/
+chroma_db/
+
+# Optional: configuration with sensitive keys
+# config.yaml
