@@ -47,7 +47,8 @@ async def chat_endpoint(request: ChatRequest):
     
     initial_state = {
         "messages": [HumanMessage(content=request.message)],
-        "memory_snapshot": memory
+        "memory_snapshot": memory,
+        "user_id": request.user_id
     }
     
     print(f"Processing streaming chat for {request.user_id}...")
@@ -73,6 +74,18 @@ async def chat_endpoint(request: ChatRequest):
                 updated_memory = final_state.get("memory_snapshot", memory)
                 manager.save_memory(updated_memory)
                 print(f"[{request.user_id}] Memory saved successfully post-stream.")
+                
+                # Phase 4: 后挂情境记忆入库
+                messages = final_state.get("messages", [])
+                if len(messages) >= 2:
+                    ai_msg = messages[-1].content
+                    # 找到触发这次对话的人类消息
+                    human_msg = next((m.content for m in reversed(messages[:-1]) if isinstance(m, HumanMessage)), None)
+                    if human_msg and ai_msg:
+                        from vector_memory import EpisodicMemoryManager
+                        v_manager = EpisodicMemoryManager(request.user_id, base_dir=os.path.join(os.path.dirname(config.storage_settings.memory_path), "chroma_db"))
+                        v_manager.add_memory(human_msg, ai_msg)
+                        print(f"[{request.user_id}] Vector episodic memory synced.")
         except Exception as e:
             print(f"Stream error: {e}")
             yield f"\n[Backend Error: {e}]"

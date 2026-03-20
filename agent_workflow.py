@@ -12,11 +12,11 @@ from memory_manager import UserMemory
 # 1. State 定义
 class AgentState(TypedDict):
     """
-    包含了消息历史，以及用户当前的记忆快照。
-    使用 add_messages 允许新消息自动追加至原有会话列表末尾。
+    包含了消息历史，以及用户当前的记忆快照，以及用户信息流转标识。
     """
     messages: Annotated[List[BaseMessage], add_messages]
     memory_snapshot: UserMemory
+    user_id: str
 
 # 实例化基于配置文件的 LLM 模型
 llm = ChatOpenAI(
@@ -41,6 +41,35 @@ def get_current_time(timezone: str = "Asia/Shanghai") -> str:
 tools = [get_current_time]
 # 绑定工具至核心对话模型
 llm_with_tools = llm.bind_tools(tools)
+
+def enrich_context_node(state: AgentState):
+    """
+    通过查询 ChromaDB，将过去可能相关的聊天对话注入系统上下文。
+    """
+    messages = state["messages"]
+    user_id = state.get("user_id", "default_user")
+    
+    # 找到最新的用户提问
+    last_human_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    if not last_human_msg or not last_human_msg.content:
+        return {}
+        
+    from vector_memory import EpisodicMemoryManager
+    from config_loader import config
+    import os
+    
+    try:
+        v_manager = EpisodicMemoryManager(user_id, base_dir=os.path.join(os.path.dirname(config.storage_settings.memory_path), "chroma_db"))
+        relevant_context = v_manager.search_memory(last_human_msg.content)
+        
+        if relevant_context:
+            context_msg = SystemMessage(content=f"[核心检索系统注入]: 注意：以下是查找到的与你想表达的意思高度相关的【往日长期情境回忆】\n{relevant_context}\n[提示结束，请利用以上回忆，结合当前画像与用户自然交流。]")
+            print(f"\n[Enrich Node] Injected semantic memory for {user_id}")
+            return {"messages": [context_msg]}
+    except Exception as e:
+        print(f"Enrich Node Error: {e}")
+        
+    return {}
 
 # 2. Node 1: chat_node
 def chat_node(state: AgentState):
@@ -152,19 +181,21 @@ def should_compress(state: AgentState):
     # 阈值配置：当历史堆叠超过 6 条消息后开始触发滑动窗口压缩
     if len(messages) > 6:
         return "compress_memory_node"
-    return "chat_node"
+    return "enrich_context_node"
 
 builder = StateGraph(AgentState)
 
 builder.add_node("compress_memory_node", compress_memory_node)
+builder.add_node("enrich_context_node", enrich_context_node)
 builder.add_node("chat_node", chat_node)
 builder.add_node("tools", tool_node)
 builder.add_node("reflect_node", reflect_node)
 
-# 定义 Edge逻辑：START -> (条件判断是否压缩) -> chat_node <-> tools
+# 定义 Edge逻辑：START -> (条件判断是否压缩) -> enrich -> chat_node <-> tools
 # 结束聊天循环后走向 -> reflect_node -> END
-builder.add_conditional_edges(START, should_compress, path_map={"compress_memory_node": "compress_memory_node", "chat_node": "chat_node"})
-builder.add_edge("compress_memory_node", "chat_node")
+builder.add_conditional_edges(START, should_compress, path_map={"compress_memory_node": "compress_memory_node", "enrich_context_node": "enrich_context_node"})
+builder.add_edge("compress_memory_node", "enrich_context_node")
+builder.add_edge("enrich_context_node", "chat_node")
 builder.add_conditional_edges("chat_node", tools_condition, path_map={"tools": "tools", "__end__": "reflect_node"})
 builder.add_edge("tools", "chat_node")
 builder.add_edge("reflect_node", END)
