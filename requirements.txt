@@ -3,3 +3,7 @@ langgraph
 langchain-openai
 pydantic
 pyyaml
+chromadb
+langchain-chroma
+langchain-huggingface
+sentence-transformers
