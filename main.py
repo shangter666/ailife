@@ -101,6 +101,17 @@ async def get_memory(user_id: str):
     memory = manager.load_memory()
     return memory.model_dump()
 
+@app.get("/v1/history/{user_id}")
+async def get_history(user_id: str):
+    """
+    从向量数据库中提取指定用户所有的历史对话原文。
+    """
+    import os
+    from vector_memory import EpisodicMemoryManager
+    from config_loader import config
+    v_manager = EpisodicMemoryManager(user_id, base_dir=os.path.join(os.path.dirname(config.storage_settings.memory_path), "chroma_db"))
+    return v_manager.get_all_history()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

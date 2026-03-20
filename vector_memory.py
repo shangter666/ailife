@@ -52,3 +52,24 @@ class EpisodicMemoryManager:
         except Exception as e:
             print(f"Chroma Semantic Search Error: {e}")
             return ""
+
+    def get_all_history(self) -> list:
+        """获取并按时间戳返回用户所有的历史对话记录"""
+        try:
+            results = self.vector_store.get(include=["documents", "metadatas"])
+            if not results or not results.get("documents"):
+                return []
+            
+            history = []
+            for doc, meta in zip(results["documents"], results["metadatas"]):
+                history.append({
+                    "content": doc,
+                    "timestamp": meta.get("timestamp", 0) if meta else 0
+                })
+            
+            # 按时间戳增序排列（旧的在前，新的在后）
+            history.sort(key=lambda x: x["timestamp"])
+            return history
+        except Exception as e:
+            print(f"Fetch History Error: {e}")
+            return []
